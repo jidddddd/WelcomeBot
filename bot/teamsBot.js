@@ -1,9 +1,43 @@
 const axios = require("axios");
 const querystring = require("querystring");
-const { TeamsActivityHandler, CardFactory, TurnContext} = require("botbuilder");
-const rawWelcomeCard = require("./adaptiveCards/welcome.json");
+const { TeamsActivityHandler, CardFactory, TurnContext, TeamsInfo } = require("botbuilder");
 const rawLearnCard = require("./adaptiveCards/learn.json");
 const cardTools = require("@microsoft/adaptivecards-tools");
+
+
+
+const editCardContent = require("./adaptiveCards/edit.json");
+
+const welcomeContent = {
+  "type": "AdaptiveCard",
+  "body": [
+    {
+      "type": "TextBlock",
+      "size": "Medium",
+      "weight": "Bolder",
+      "text": "Welcome"
+    },
+    {
+      "type": "TextBlock",
+      "text": "Here are some resources to help you get started",
+      "wrap": true
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.OpenUrl",
+      "title": "MSW",
+      "url": "https://microsoft.sharepoint.com/"
+    },
+    {
+      "type": "Action.OpenUrl",
+      "title": "Setting up your devices",
+      "url": "https://portal.manage-beta.microsoft.com/devices"
+    }
+  ],
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.4"
+};
 
 class TeamsBot extends TeamsActivityHandler {
   constructor() {
@@ -25,23 +59,18 @@ class TeamsBot extends TeamsActivityHandler {
 
       // Trigger command by IM text
       switch (txt) {
-        case "welcome": {
-          const card = cardTools.AdaptiveCards.declareWithoutData(rawWelcomeCard).render();
+        case "edit": {
+          editCardContent.body[1].value = JSON.stringify(welcomeContent);
+          const card = cardTools.AdaptiveCards.declareWithoutData(editCardContent).render();
           await context.sendActivity({ attachments: [CardFactory.adaptiveCard(card)] });
           break;
         }
-        case "learn": {
-          this.likeCountObj.likeCount = 0;
-          const card = cardTools.AdaptiveCards.declare(rawLearnCard).render(this.likeCountObj);
-          await context.sendActivity({ attachments: [CardFactory.adaptiveCard(card)] });
-          break;
-        }
-        /**
-         * case "yourCommand": {
-         *   await context.sendActivity(`Add your response here!`);
-         *   break;
-         * }
-         */
+        // case "learn": {
+        //   this.likeCountObj.likeCount = 0;
+        //   const card = cardTools.AdaptiveCards.declare(rawLearnCard).render(this.likeCountObj);
+        //   await context.sendActivity({ attachments: [CardFactory.adaptiveCard(card)] });
+        //   break;
+        // }
       }
 
       // By calling next() you ensure that the next BotHandler is run.
@@ -51,9 +80,12 @@ class TeamsBot extends TeamsActivityHandler {
     // Listen to MembersAdded event, view https://docs.microsoft.com/en-us/microsoftteams/platform/resources/bot-v3/bots-notifications for more events
     this.onMembersAdded(async (context, next) => {
       const membersAdded = context.activity.membersAdded;
+      
       for (let cnt = 0; cnt < membersAdded.length; cnt++) {
         if (membersAdded[cnt].id) {
-          const card = cardTools.AdaptiveCards.declareWithoutData(rawWelcomeCard).render();
+          const member = await TeamsInfo.getMember(context, membersAdded[cnt].id);
+          welcomeContent.body[0].text = `Welcome ${member.name}!`;
+          const card = cardTools.AdaptiveCards.declareWithoutData(welcomeContent).render();
           await context.sendActivity({ attachments: [CardFactory.adaptiveCard(card)] });
           break;
         }
