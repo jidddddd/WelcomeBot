@@ -1,10 +1,18 @@
 const axios = require("axios");
 const querystring = require("querystring");
 const { TeamsActivityHandler, CardFactory, TurnContext, TeamsInfo } = require("botbuilder");
-const rawLearnCard = require("./adaptiveCards/learn.json");
 const cardTools = require("@microsoft/adaptivecards-tools");
 
+const dotenv = require("dotenv");
+dotenv.config({ path: `${__dirname}/.env` });
 
+const endpoint = process.env.COSMOS_ENDPOINT;
+const key = process.env.COSMOS_KEY;
+const dbID = process.env.COSMOS_DATABASE_ID;
+const containerID = process.env.COSMOS_CONTAINER_ID;
+
+const { CosmosClient} = require("@azure/cosmos");
+const cosmosClient = new CosmosClient({ endpoint, key });
 
 const editCardContent = require("./adaptiveCards/edit.json");
 
@@ -36,41 +44,52 @@ const welcomeContent = {
     }
   ],
   "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-  "version": "1.4"
+  "version": "1.5"
 };
 
 class TeamsBot extends TeamsActivityHandler {
   constructor() {
     super();
 
-    // record the likeCount
-    this.likeCountObj = { likeCount: 0 };
+    this.db = null;
+    this.container = null;
 
     this.onMessage(async (context, next) => {
+      await this.eastablishDBConnection();
+
       console.log("Running with Message Activity.");
       let txt = context.activity.text;
-      const removedMentionText = TurnContext.removeRecipientMention(
-        context.activity
-      );
-      if (removedMentionText) {
-        // Remove the line break
-        txt = removedMentionText.toLowerCase().replace(/\n|\r/g, "").trim();
-      }
-
-      // Trigger command by IM text
-      switch (txt) {
-        case "edit": {
-          editCardContent.body[1].value = JSON.stringify(welcomeContent);
-          const card = cardTools.AdaptiveCards.declareWithoutData(editCardContent).render();
-          await context.sendActivity({ attachments: [CardFactory.adaptiveCard(card)] });
-          break;
+      if (txt) {
+        const removedMentionText = TurnContext.removeRecipientMention(
+          context.activity
+        );
+        if (removedMentionText) {
+          // Remove the line break
+          txt = removedMentionText.toLowerCase().replace(/\n|\r/g, "").trim();
         }
-        // case "learn": {
-        //   this.likeCountObj.likeCount = 0;
-        //   const card = cardTools.AdaptiveCards.declare(rawLearnCard).render(this.likeCountObj);
-        //   await context.sendActivity({ attachments: [CardFactory.adaptiveCard(card)] });
-        //   break;
-        // }
+  
+        // Trigger command by IM text
+        switch (txt) {
+          case "edit": {
+            const content = await this.getWelcomeContent();
+            editCardContent.body[1].value = JSON.stringify(content);
+            const card = cardTools.AdaptiveCards.declareWithoutData(editCardContent).render();
+            await context.sendActivity({ attachments: [CardFactory.adaptiveCard(card)] });
+            break;
+          }
+        }
+
+      } else {
+        const button = context.activity.value.button;
+        switch (button) {
+          case 'editSubmit': {
+            const contentString = context.activity.value.multilineInputId;
+            const content = JSON.parse(contentString);
+            content.id = 'welcome';
+            const result = await this.container.items.upsert(content);
+            console.log(result.statusCode);
+          }
+        }
       }
 
       // By calling next() you ensure that the next BotHandler is run.
@@ -80,12 +99,17 @@ class TeamsBot extends TeamsActivityHandler {
     // Listen to MembersAdded event, view https://docs.microsoft.com/en-us/microsoftteams/platform/resources/bot-v3/bots-notifications for more events
     this.onMembersAdded(async (context, next) => {
       const membersAdded = context.activity.membersAdded;
+      let content = null;
       
       for (let cnt = 0; cnt < membersAdded.length; cnt++) {
         if (membersAdded[cnt].id) {
+          if (!content) {
+            content = await this.getWelcomeContent();
+          }
           const member = await TeamsInfo.getMember(context, membersAdded[cnt].id);
-          welcomeContent.body[0].text = `Welcome ${member.name}!`;
-          const card = cardTools.AdaptiveCards.declareWithoutData(welcomeContent).render();
+          content.body[0].text = `Welcome ${member.name}!`;
+          console.log(content);
+          const card = cardTools.AdaptiveCards.declareWithoutData(content).render();
           await context.sendActivity({ attachments: [CardFactory.adaptiveCard(card)] });
           break;
         }
@@ -94,25 +118,57 @@ class TeamsBot extends TeamsActivityHandler {
     });
   }
 
+  async getWelcomeContent() {
+    await this.eastablishDBConnection();
+
+    let content = welcomeContent;
+    const item = this.container.item('welcome', 'welcome');
+    const response = await item.read();
+    if (response.statusCode === 200) {
+      content = response.resource;
+      content = {
+        type: content.type,
+        body: content.body,
+        actions: content.actions,
+        version: content.version,
+        $schema: content.$schema
+      };
+    }
+    return content;
+  }
+
+  async eastablishDBConnection() {
+    if (this.db !== null && this.container !== null) {
+      return;
+    }
+    console.log("eastablishing db connection");
+    this.db = (await cosmosClient.databases.createIfNotExists({ id: dbID })).database;
+    console.log(this.db.id);
+    this.container = (await this.db.containers.createIfNotExists({ id: containerID })).container;
+    console.log(this.container.id);
+  }
+
   // Invoked when an action is taken on an Adaptive Card. The Adaptive Card sends an event to the Bot and this
   // method handles that event.
   async onAdaptiveCardInvoke(context, invokeValue) {
-    // The verb "userlike" is sent from the Adaptive Card defined in adaptiveCards/learn.json
-    if (invokeValue.action.verb === "userlike") {
-      this.likeCountObj.likeCount++;
-      const card = cardTools.AdaptiveCards.declare(rawLearnCard).render(this.likeCountObj);
-      await context.updateActivity({
-        type: "message",
-        id: context.activity.replyToId,
-        attachments: [CardFactory.adaptiveCard(card)],
-      });
-      return { statusCode: 200 };
-    }
+    console.log('asdfasdfasdfasdfasdf asdfasdfasdfasdfasdfasdfasdfasdf');
+    // // The verb "userlike" is sent from the Adaptive Card defined in adaptiveCards/learn.json
+    // if (invokeValue.action.verb === "userlike") {
+    //   this.likeCountObj.likeCount++;
+    //   const card = cardTools.AdaptiveCards.declare(rawLearnCard).render(this.likeCountObj);
+    //   await context.updateActivity({
+    //     type: "message",
+    //     id: context.activity.replyToId,
+    //     attachments: [CardFactory.adaptiveCard(card)],
+    //   });
+    //   return { statusCode: 200 };
+    // }
   }
 
   // Messaging extension Code
   // Action.
   handleTeamsMessagingExtensionSubmitAction(context, action) {
+    console.log("team messaging extension submit action");
     switch (action.commandId) {
       case "createCard":
         return createCardCommand(context, action);
